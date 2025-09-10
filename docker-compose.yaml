@@ -1,0 +1,74 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${DB_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  db-init: # подключаем скрипт который будет наполнять нашу БД товарами
+    build:
+      context: ./backend  
+    image: shop-backend 
+    depends_on: 
+      db:
+        condition: service_healthy # чтобы знать когда бд запуститься и будет готова принимать, после этого запустим db-int
+    environment: 
+      DB_HOST: db 
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+    command: ["node", "scripts/setup-database.js"] # пишем что используем node и запускаем такой скрипт
+    restart: "no" # потомучто перезапускать это контейнер не нужно
+
+  backend:
+    build:
+      context: ./backend # в какой папке искать докерфайл
+    image: shop-backend # как будет нызыватся image после сборки
+    depends_on: # зависимости (__on так как сервис зависит от БД)
+      db:
+        condition: service_healthy #убеждаемся что БД запущена
+      db-init:
+        condition: service_completed_successfully # указываем что сервис успешно выполнился
+    environment: # переменные окружения будут использованы для подключения к БД
+      DB_HOST: db # указываем явно имя servise из dockercompose.yaml 
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - "8090:3001" #когда запустится бекендприложенине оно откроется наружу на 8090 и наш фронт получит этот адрес во время билда
+    healthcheck:
+    # указываем localhost:3001, внутренний порт 3001 нашего бекенд приложения, хелсчек будет выполнятся внутри докерконтейнера, а внутри его есть свой локалхост и он обратится на него на локалхост
+    #ибудет дергать наш энпоинт   
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/health"] # будет запускаться командная строка, используем обычный curl и делаем запрос на наш бек с адресом хелс, контейнер видит сам сабя на 3001
+      interval: 10s # проверка каждые 10с
+      timeout: 5s 
+      retries: 3
+      start_period: 5s # режим пощады, докеркомпоз будет ждать перед тем как бек запуститься
+
+  frontend:
+    build:
+      context: ./frontend
+      args: # прописываем переменную из докерфайла
+        VITE_BACKEND_URL: ${VITE_BACKEND_URL:-http://localhost:8090/api} #когда запустится бекендприложенине оно откроется наружу на 8090 и наш фронт получит этот адрес во время билда
+    image: shop-frontend # какое имяполучит после сборки
+    ports: # front это та часть с которой взаимодействует пользователь через браузер, поэтому нужно пробросить порт
+      - "8080:80"
+    depends_on: # указываем что фронт зависит от бека, запуститься после бека
+      backend:
+        condition: service_healthy # запуск фронта когда бек будет готов
+
+volumes:
+  pgdata:
+
+
+# поднимется бд, пройдет  pg_isready  (healthcheck). сбилдится бек, потом билд и сборка фронт приложения
